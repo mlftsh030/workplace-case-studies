@@ -1,0 +1,15 @@
+{
+  "note": "Reference checklist only: not automatically loaded. Set values through setupProduction, Settings or the documented Script Property. No secrets.",
+  "projectName": "Recruitment pilot",
+  "timeZone": "Africa/Johannesburg",
+  "ownerAccount": "YOUR_GOOGLE_ACCOUNT",
+  "applicantDeploymentBaseUrl": "COPY_APPLICANT_URL_ENDING_IN_EXEC",
+  "ownerAdminUrl": "COPY_PRIVATE_URL_AND_APPEND_PAGE_ADMIN",
+  "staffEmails": [],
+  "contactEmail": "",
+  "calendarEnabled": false,
+  "optionalScriptProperties": {
+    "LOGIN_DAILY_LIMIT": "50"
+  },
+  "branding": "Replace Brand.html and adapt Stay & Connect labels; trademarks are excluded."
+}

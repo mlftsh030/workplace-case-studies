@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head><base target="_top"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stay & Connect — Applications</title><?!= include_('Styles') ?></head>
+<body>
+<template id="brand-template"><?!= include_('Brand') ?></template>
+<div id="app"></div><div id="modal-root"></div><div id="toast" role="status" aria-live="polite"></div>
+<?!= include_('Client') ?>
+<script>
+(() => {
+  const root = document.getElementById('app'), modalRoot = document.getElementById('modal-root');
+  const initialRound = <?!= json_(initialRoundId) ?>;
+  const esc = SC.esc, date = SC.date;
+  let opportunities, home = null, selectedRound = initialRound, busy = false, previousFocus, toastTimer;
+  function toast(text, error = false) {
+    const el = document.getElementById('toast');
+    el.textContent = text;
+    el.className = 'show' + (error ? ' error': '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.className = '', 6000);
+  }
+  async function load() {
+    opportunities = await SC.rpc('getPublicOpportunities');
+    if (SC.token('applicant')) {
+      try {
+        home = await SC.rpc('getApplicantHome', SC.token('applicant'));
+      } catch (e) {
+        if (String(e.message).includes('AUTH_REQUIRED')) {
+          await SC.signOut('applicant');
+          home = null;
+        } else throw e;
+      }
+    }
+    if (!opportunities.rounds.some(r => r.id === selectedRound)) selectedRound = opportunities.rounds[0]?.id || '';
+    render();
+  }
+  function button(text, action, id = '', other = '') {
+    return `<button class="btn ${other}" data-action="${action}" data-id="${esc(id)}">${text}</button>`;
+  }
+  function render() {
+    root.innerHTML = `<header class="applicant-header"><div>${SC.brand()}</div><div class="row wrap">${home ? `<span class="tiny">${esc(home.email)}</span>${button('Sign out', 'logout')}`: button('Sign in / create account', 'login', '', 'primary')}</div></header><main class="portal"><section class="hero"><div><div class="eyebrow">STAY & CONNECT RECRUITMENT</div><h1>Find your next opportunity.</h1><p>Explore summer, winter, internship and other recruitment rounds. Apply for suitable roles and follow your own applications here.</p></div></section>${home ? myApplications(): ''}<section class="portal-head"><div><h2>Open recruitment rounds</h2><p class="tiny">All deadlines and interview times are shown in South African Standard Time.</p></div><select id="round-select" class="round-select" aria-label="Select recruitment round"><option value="">Choose a round</option>${opportunities.rounds.map(r => `<option value="${esc(r.id)}" ${selectedRound === r.id ? 'selected': ''}>${esc(r.name)} · ${esc(r.category)}</option>`).join('')}</select></section>${roleCards()}${opportunities.contactEmail ? `<p class="footer-note">Need assistance? <a href="mailto:${esc(opportunities.contactEmail)}">Contact recruitment</a>.</p>`: ''}</main>`;
+  }
+  function roleCards() {
+    const roles = opportunities.roles.filter(r => r.roundId === selectedRound);
+    if (!roles.length) return `<section class="card empty">${opportunities.ready ? 'No roles are accepting applications in this round at present.': 'Recruitment is being set up. Please check again later.'}</section>`;
+    return `<div class="info" style="margin-bottom:20px"><strong>Apply for suitable roles. Accept one appointment per round.</strong>You can apply to multiple roles within a round; accepting a role reserves your appointment in that round.</div><div class="grid equal">${roles.map(r => `<section class="card role-card"><span class="badge open">Applications open</span><h2 style="margin-top:18px">${esc(r.title)}</h2><p>${esc(r.description)}</p><div class="meta-grid"><div><small>Contract period</small>${date(r.start)} – ${date(r.end)}</div><div><small>Application deadline · SAST</small>${date(r.deadline, true)}</div><div><small>Positions</small>${r.capacity}</div></div><h3>Requirements</h3>${r.requirements.map(q => `<p class="tiny">• ${esc(q.label)} <span class="muted">(${esc(q.kind)})</span></p>`).join('')}${button('Apply', 'apply', r.id, 'primary')}</section>`).join('')}</div>`;
+  }
+  function myApplications() {
+    return `<section class="portal-head"><h2>My applications</h2>${button('Refresh', 'refresh')}</section>${home.applications.map(a => `<section class="card candidate-card"><div class="row spread wrap"><div><span class="eyebrow">${esc(a.reference)}</span><h3>${esc(a.role.title)}</h3><p class="tiny">${esc(a.roundName)} · Submitted ${date(a.submittedAt)}</p></div><span class="badge">${esc(a.status)}</span></div>${a.informationRequest ? `<div class="info"><strong>Information requested</strong>${esc(a.informationRequest)}</div>`: ''}${a.booking ? `<div class="info"><strong>Interview booked: ${date(a.booking.start, true)} SAST</strong>${a.booking.duration} minutes · Panel: ${esc(a.booking.panel.join(', '))}${a.booking.location ? '<br>Location: ' + esc(a.booking.location): ''}${a.booking.meetingUrl ? `<br><a href="${esc(a.booking.meetingUrl)}" target="_blank" rel="noopener">Join meeting</a>`: ''}</div>`: ''}<div class="row wrap" style="margin-top:16px">${a.canBook ? button('Choose interview slot', 'slots', a.id, 'primary'): ''}${a.canAccept ? button('Accept offer', 'accept', a.id, 'primary'): ''}${a.canDecline ? button('Decline offer', 'decline', a.id): ''}${a.canUpdate ? button('Update / supply information', 'update', a.id): ''}${a.canWithdraw ? button('Withdraw application', 'withdraw', a.id, 'danger'): ''}${button('View application', 'detail', a.id)}</div></section>`).join('') || '<section class="card empty">You have not submitted any applications yet.</section>'}`;
+  }
+  function modal(title, content) {
+    previousFocus = document.activeElement;
+    modalRoot.innerHTML = `<div class="overlay"><section class="modal wide" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" data-action="close" aria-label="Close dialog">×</button></div><div class="modal-body">${content}</div></section></div>`;
+    modalRoot.querySelector('input,button,select,textarea')?.focus();
+  }
+  function close() {
+    modalRoot.innerHTML = '';
+    previousFocus?.focus?.();
+  }
+  function field(label, name, value = '', type = 'text', required = true) {
+    return `<label class="field">${label}<input name="${name}" value="${esc(value)}" type="${type}" ${required ? 'required': ''} maxlength="4000"></label>`;
+  }
+  function answerFields(roles, answers = {}) {
+    const night = roles.some(r => r.template === 'night'), questions = [...new Map(roles.flatMap(r => r.questions || []).map(q => [q.id, q])).values()];
+    return `<label class="check"><input name="available" type="checkbox" ${answers.available ? 'checked': ''}><span>I am available for the full contract period and required shifts.</span></label>${night ? `<div class="form-grid"><label class="field">Valid manual driving licence<select name="manualLicence"><option value="false">No</option><option value="true" ${answers.manualLicence ? 'selected': ''}>Yes</option></select></label>${field('Years driving manual', 'drivingYears', answers.drivingYears || 0, 'number')}</div>`: '<input name="manualLicence" type="hidden" value="false"><input name="drivingYears" type="hidden" value="0">'}<label class="field">Why are you suitable for the selected role(s)?<textarea name="motivation" maxlength="4000" required>${esc(answers.motivation || '')}</textarea></label><label class="field">Describe how you would handle an unexpected problem in this role.<textarea name="scenario" maxlength="4000" required>${esc(answers.scenario || '')}</textarea></label>${questions.map(q => `<label class="field">${esc(q.label)}${q.type === 'yesno' ? `<select name="custom_${esc(q.id)}" ${q.required ? 'required': ''}><option value="">Choose…</option><option ${answers.custom?.[q.id] === 'Yes' ? 'selected': ''}>Yes</option><option ${answers.custom?.[q.id] === 'No' ? 'selected': ''}>No</option></select>`: `<input name="custom_${esc(q.id)}" type="${q.type === 'number' ? 'number': 'text'}" value="${esc(answers.custom?.[q.id] ?? '')}" maxlength="2000" ${q.required ? 'required': ''}>`}</label>`).join('')}`;
+  }
+  function applicationForm(roleId) {
+    const roles = opportunities.roles.filter(r => r.roundId === selectedRound), p = home.person || {};
+    const answers = {
+      available: false,
+      custom: {}
+    };
+    modal('Apply to this recruitment round', `<form id="application-form"><div class="info">Signed in as <b>${esc(home.email)}</b>. Your application is tied to this verified email account.</div><h3 style="margin-top:20px">Select roles</h3>${roles.map(r => `<label class="check"><input name="roleIds" type="checkbox" value="${esc(r.id)}" ${r.id === roleId ? 'checked': ''}><span>${esc(r.title)}</span></label>`).join('')}<div class="form-grid">${field('Full name', 'name', p.name || '')}${field('Student / applicant identifier', 'studentNumber', p.studentNumber || '')}${field('Phone', 'phone', p.phone || '', 'tel', false)}${field('Residence / location', 'residence', p.residence || '', 'text', false)}</div><label class="field">Relevant experience<textarea name="experience" maxlength="4000" required>${esc(p.experience || '')}</textarea></label><div id="answer-fields">${answerFields(roles.filter(r => r.id === roleId), answers)}</div><label class="field">CV and supporting PDFs<input name="files" type="file" accept="application/pdf,.pdf" multiple required><small>1–3 files, each up to 2 MB; 4 MB combined. Include the supporting evidence requested by the selected roles.</small></label><label class="check"><input name="dataUseAcknowledged" type="checkbox" required><span>I confirm this information is accurate and understand it will be used to assess my application. I can contact recruitment about my information.</span></label><button class="btn primary" type="submit">Submit application</button><p id="form-error" class="error-text" role="status"></p></form>`);
+  }
+  function updateForm(a) {
+    modal('Update application', `<form id="update-form" data-id="${esc(a.id)}"><p>${esc(a.reference)} · ${esc(a.role.title)}</p>${answerFields([a.role], a.answers)}<label class="field">Additional supporting PDFs · optional<input name="files" type="file" accept="application/pdf,.pdf" multiple><small>Up to three additional files per update; no more than five documents per application.</small></label><p class="tiny">Updating resets the verification checks so the team can assess your revised evidence.</p><button class="btn primary" type="submit">Save update</button><p id="form-error" class="error-text" role="status"></p></form>`);
+  }
+  function detail(a) {
+    modal('Your application', `<section class="packet"><h2>${esc(a.role.title)}</h2><p>${esc(a.reference)} · ${esc(a.status)}</p><h3>Motivation</h3><p>${esc(a.answers.motivation)}</p><h3>Scenario response</h3><p>${esc(a.answers.scenario)}</p><h3>Supporting documents</h3>${a.documents.map(d => `<div class="doc"><span>${esc(d.name)}</span><button class="btn small" data-action="download" data-id="${esc(a.id)}" data-index="${d.index}">Download</button></div>`).join('')}</section>`);
+  }
+  async function action(name, id, element) {
+    if (busy && name !== 'close') return;
+    const a = home?.applications.find(a => a.id === id);
+    try {
+      if (name === 'close') return close();
+      if (name === 'login') return SC.signIn(root, 'applicant', load);
+      if (name === 'logout') {
+        await SC.signOut('applicant');
+        home = null;
+        return render();
+      }
+      if (name === 'refresh') return await load();
+      if (name === 'apply') {
+        if (!home) return SC.signIn(root, 'applicant', async() => {
+          await load();
+          applicationForm(id);
+        });
+        return applicationForm(id);
+      }
+      if (name === 'detail') return detail(a);
+      if (name === 'update') return updateForm(a);
+      if (name === 'download') return await SC.download('applicant', id, element.dataset.index);
+      if (name === 'slots') {
+        const slots = await SC.rpc('getApplicantSlots', SC.token('applicant'), id);
+        return modal('Choose an interview slot', `<p>All times are SAST. Availability is checked again when you book.</p><div class="slots">${slots.map(s => `<button class="slot" data-action="book" data-id="${esc(id)}" data-slot="${esc(s.id)}"><b>${date(s.start, true)}</b><small>${s.duration} minutes · ${esc(s.panel.join(', '))}</small></button>`).join('') || '<p>No slots are available. Please contact recruitment.</p>'}</div>`);
+      }
+      if (['accept', 'decline', 'withdraw'].includes(name) && !confirm({
+        accept: 'Accept this offer? Only one role can be appointed in this round.',
+        decline: 'Decline this offer and release the reserved position?',
+        withdraw: 'Withdraw this application?'
+      }
+      [name])) return;
+      if (['book', 'accept', 'decline', 'withdraw'].includes(name)) {
+        busy = true;
+        document.body.classList.add('busy');
+        home = await SC.rpc('executeApplicantAction', SC.token('applicant'), name, id, name === 'book' ? element.dataset.slot: null, SC.id());
+        close();
+        render();
+        toast('Your application has been updated.');
+      }
+    } catch (e) {
+      if (String(e.message).includes('AUTH_REQUIRED')) {
+        await SC.signOut('applicant');
+        home = null;
+        SC.signIn(root, 'applicant', load, 'Your session expired. Sign in again.');
+      } else toast(e.message || String(e), true);
+    } finally {
+      busy = false;
+      document.body.classList.remove('busy');
+    }
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-action]');
+    if (b) action(b.dataset.action, b.dataset.id, b);
+  });
+  document.addEventListener('change', e => {
+    if (e.target.id === 'round-select') {
+      selectedRound = e.target.value;
+      render();
+    }
+    if (e.target.name === 'roleIds') {
+      const f = e.target.form, ids = [...f.querySelectorAll('[name=roleIds]:checked')].map(x => x.value), area = f.querySelector('#answer-fields'), v = Object.fromEntries(new FormData(f));
+      const old = {
+        available: f.elements.available.checked,
+        manualLicence: v.manualLicence === 'true',
+        drivingYears: v.drivingYears,
+        motivation: v.motivation,
+        scenario: v.scenario,
+        custom: Object.fromEntries(Object.entries(v).filter(([k]) => k.startsWith('custom_')).map(([k, val]) => [k.slice(7), val]))
+      };
+      area.innerHTML = answerFields(opportunities.roles.filter(r => ids.includes(r.id)), old);
+    }
+  });
+  document.addEventListener('submit', async e => {
+    const f = e.target;
+    if (!['application-form', 'update-form'].includes(f.id)) return;
+    e.preventDefault();
+    if (busy) return;
+    busy = true;
+    document.body.classList.add('busy');
+    try {
+      const fd = new FormData(f), v = Object.fromEntries(fd);
+      delete v.files;
+      const payload = {
+        ...v,
+        dataUseAcknowledged: fd.has('dataUseAcknowledged'),
+        available: fd.has('available'),
+        manualLicence: v.manualLicence === 'true',
+        drivingYears: Number(v.drivingYears || 0),
+        custom: Object.fromEntries(Object.entries(v).filter(([k]) => k.startsWith('custom_')).map(([k, val]) => [k.slice(7), val])),
+        documents: await SC.files(f.elements.files, f.id === 'application-form')
+      };
+      if (f.id === 'application-form') {
+        payload.roleIds = fd.getAll('roleIds');
+        const fingerprint = JSON.stringify(payload);
+        if (f._fingerprint !== fingerprint) {
+          f._fingerprint = fingerprint;
+          f._requestId = SC.id();
+        }
+        const result = await SC.rpc('submitApplicantApplication', SC.token('applicant'), payload, f._requestId);
+        close();
+        await load();
+        toast('Application received: ' + result.references.join(', '));
+      } else {
+        home = await SC.rpc('executeApplicantAction', SC.token('applicant'), 'update', f.dataset.id, payload, SC.id());
+        close();
+        render();
+        toast('Application update saved.');
+      }
+    } catch (error) {
+      const output = f.querySelector('#form-error');
+      if (output) output.textContent = error.message || String(error);
+      else toast(error.message || String(error), true);
+    } finally {
+      busy = false;
+      document.body.classList.remove('busy');
+    }
+  });
+  document.addEventListener('keydown', e => {
+    if (!modalRoot.innerHTML) return;
+    if (e.key === 'Escape') close();
+    if (e.key === 'Tab') {
+      const items = [...modalRoot.querySelectorAll('button,input,select,textarea,a[href]')].filter(x => !x.disabled), first = items[0], last = items.at(-1);
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
+  });
+  root.innerHTML = '<main><h1>Loading recruitment opportunities…</h1></main>';
+  load().catch (e => {
+    root.innerHTML = `<main><h1>Recruitment is unavailable</h1><p>${esc(e.message || String(e))}</p><button class="btn" onclick="location.reload()">Try again</button></main>`;
+  });
+})();
+</script>
+</body></html>

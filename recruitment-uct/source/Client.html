@@ -1,0 +1,147 @@
+<script>
+window.SC = (() => {
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }
+  [c]));
+  const rpc = (name, ...args) => new Promise((resolve, reject) => google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args));
+  const memoryTokens = {};
+  const token = kind => {
+    try {
+      return sessionStorage.getItem('sc-session-' + kind) || memoryTokens[kind] || '';
+    } catch {
+      return memoryTokens[kind] || '';
+    }
+  };
+  const id = () => crypto.randomUUID();
+  const brand = () => document.getElementById('brand-template').innerHTML;
+  const date = (value, time = false) => new Intl.DateTimeFormat('en-ZA', {
+    dateStyle: 'medium',
+    ...(time ? {
+      timeStyle: 'short'
+    }
+    : {}),
+    timeZone: 'Africa/Johannesburg'
+  }).format(new Date(value));
+  function localDateTime(days = 7) {
+    const d = new Date(Date.now() + days * 86400000), parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZone: 'Africa/Johannesburg'
+    }).formatToParts(d).map(p => [p.type, p.value]));
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+  }
+  function signIn(root, kind, done, message = '') {
+    root.innerHTML = `<main class="auth-wrap"><section class="card auth-card"><div class="auth-brand">${brand()}</div><h1>${kind === 'admin' ? 'Administrator sign-in': 'Your application account'}</h1><p>Receive a one-time code at your email address. No password is required.</p><form id="sc-email-form"><label class="field">Email address<input name="email" type="email" autocomplete="email" required></label><button class="btn primary" type="submit">Send sign-in code</button></form><form id="sc-code-form" hidden><label class="field">Six-digit code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required></label><button class="btn primary" type="submit">Verify and sign in</button><button class="btn ghost" id="sc-back" type="button">Use another email / resend</button></form><p class="error-text" id="sc-login-error" role="status">${esc(message)}</p><p class="tiny">Codes expire after 10 minutes. Request limits apply.</p></section></main>`;
+    const emailForm = root.querySelector('#sc-email-form'), codeForm = root.querySelector('#sc-code-form'), error = root.querySelector('#sc-login-error');
+    let challengeId;
+    async function run(form, operation) {
+      const buttons = [...root.querySelectorAll('button')];
+      buttons.forEach(b => b.disabled = true);
+      error.textContent = '';
+      try {
+        await operation();
+      } catch (e) {
+        error.textContent = e.message || String(e);
+      } finally {
+        buttons.forEach(b => b.disabled = false);
+      }
+    }
+    emailForm.addEventListener('submit', e => {
+      e.preventDefault();
+      run(emailForm, async() => {
+        const result = await rpc('requestLogin', emailForm.elements.email.value);
+        challengeId = result.challengeId;
+        emailForm.hidden = true;
+        codeForm.hidden = false;
+        codeForm.elements.code.focus();
+      });
+    });
+    codeForm.addEventListener('submit', e => {
+      e.preventDefault();
+      run(codeForm, async() => {
+        const result = await rpc('verifyLogin', challengeId, codeForm.elements.code.value);
+        if (kind === 'admin' && !['owner', 'admin'].includes(result.role)) {
+          await rpc('logout', result.token);
+          throw new Error('This email is not on the administrator access list.');
+        }
+        memoryTokens[kind] = result.token;
+        try {
+          sessionStorage.setItem('sc-session-' + kind, result.token);
+        } catch {}
+        await done();
+      });
+    });
+    root.querySelector('#sc-back').addEventListener('click', () => {
+      codeForm.hidden = true;
+      emailForm.hidden = false;
+      codeForm.reset();
+    });
+    emailForm.elements.email.focus();
+  }
+  async function signOut(kind) {
+    const value = token(kind);
+    delete memoryTokens[kind];
+    try {
+      sessionStorage.removeItem('sc-session-' + kind);
+    } catch {}
+    if (value) {
+      try {
+        await rpc('logout', value);
+      } catch {}
+    }
+  }
+  async function files(input, required = false) {
+    const values = [...input.files];
+    if (required && !values.length) throw new Error('Upload at least one PDF.');
+    if (values.length > 3 || values.reduce((n, f) => n + f.size, 0) > 4 * 1024 * 1024) throw new Error('Upload at most three PDFs, totalling no more than 4 MB.');
+    const result = [];
+    for (const file of values) {
+      if (!/\.pdf$/i.test(file.name) || file.size > 2 * 1024 * 1024 || !file.size) throw new Error('Each file must be a PDF under 2 MB.');
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = () => reject(new Error('Could not read ' + file.name));
+        reader.readAsDataURL(file);
+      });
+      result.push({
+        name: file.name,
+        base64
+      });
+    }
+    return result;
+  }
+  async function download(kind, appId, index) {
+    const value = await rpc('downloadEvidence', token(kind), appId, Number(index), kind === 'admin');
+    const bytes = Uint8Array.from(atob(value.base64), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], {
+      type: value.mime
+    })), link = document.createElement('a');
+    link.href = url;
+    link.download = value.name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+  return {
+    esc,
+    rpc,
+    token,
+    id,
+    brand,
+    date,
+    localDateTime,
+    signIn,
+    signOut,
+    files,
+    download
+  };
+})();
+</script>

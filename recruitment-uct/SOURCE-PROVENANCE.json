@@ -1,0 +1,13 @@
+{
+  "source": "Recovered user project files dated 13 October 2026",
+  "retrieved": "2026-10-14",
+  "changes": "Six core files copied byte-for-byte; Brand.html replaced with neutral placeholder; config.example.json added. No live deployment performed.",
+  "sha256": {
+    "Code.gs": "635cef2ac930d793fe1f95aac56ba09bde16bcb31f8ff439a532fd94cf847986",
+    "Index.html": "7e13a06d052551f2c58315f7a9e17edbb7441edc34e75dd2a4e69e36154ced44",
+    "Applicant.html": "c057cf12464a23900941e480096d857798e2563b81206d48dfa8b9d75b3e7802",
+    "Styles.html": "c975afe5a0197212d3513e091ddd6ac3f10fda5657502bf585fe115acfa78b85",
+    "Client.html": "baed37a12dcbd46f3338b39d27c7d19bfba263c9471a79b5e9efce1403307f89",
+    "appsscript.json": "db24b4345f07ec66e9e6d6bd978990d76d790bea8714a22c37f03ec53570812e"
+  }
+}

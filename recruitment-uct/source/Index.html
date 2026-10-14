@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en"><head><base target="_top"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stay & Connect — Admin</title><?!= include_('Styles') ?></head><body>
+<template id="brand-template"><?!= include_('Brand') ?></template>
+<a class="skip-link" href="#main">Skip to content</a><div id="app"></div><div id="modal-root"></div><div id="toast" role="status" aria-live="polite"></div>
+<?!= include_('Client') ?>
+    <script>
+      (() => {
+        'use strict';
+        let busy = false, state, config;
+        // HtmlService fills these read-only display helpers from Code.gs.
+        // All recruitment commands and validation run through executeAdminAction on the server.
+        const View = {
+          label: <?!= json_(Recruitment.label) ?>,
+          copy: value => JSON.parse(JSON.stringify(value)),
+          uid: prefix => prefix + '_' + SC.id(),
+          person: (s, id) => s.people.find(x => x.id === id),
+          role: (s, id) => s.roles.find(x => x.id === id),
+          app: (s, id) => s.applications.find(x => x.id === id),
+          occupancy: (s, id) => s.roles.find(x => x.id === id)._ui.occupancy,
+          allocation: (s, p, r) => s.allocations.find(x => x.personId === p && x.roundId === r && ['offered', 'accepted', 'appointed'].includes(x.status)),
+          eligibility: (s, a) => a._ui.eligibility,
+          checked: (s, a) => a._ui.checked,
+          publicStatus: (s, a) => a._ui.publicStatus
+        };
+        const rpc = (name, ...args) => SC.rpc(name, ...args);
+        let route = 'overview', mailTab = 'pending', filter = {
+          search: '',
+          role: '',
+          stage: ''
+        }, focusBefore, toastTimer;
+        const root = document.getElementById('app'), modalRoot = document.getElementById('modal-root');
+        const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        }
+        [c]));
+        const icons = {
+          overview: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+          roles: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V4h8v3M3 12h18M10 12v3h4v-3"/>',
+          applications: '<circle cx="9" cy="8" r="3"/><path d="M3 20v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 5"/>',
+          interviews: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 11h18M8 15h2M14 15h2"/>',
+          decisions: '<path d="m4 12 5 5L20 6"/><circle cx="12" cy="12" r="10"/>',
+          communications: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/>',
+          guide: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+          building: '<path d="M4 21V4h12v17M16 9h4v12M2 21h20M8 8h4M8 12h4M8 16h4"/>',
+          arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
+          clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+        };
+        const icon = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[n] || icons.roles}</svg>`;
+        const btn = (text, action, id = '', kind = '') => `<button class="btn ${kind}" data-action="${action}" data-id="${esc(id)}">${text}</button>`;
+        const initials = n => n.split(' ').map(x => x[0]).slice(0, 2).join('');
+        const apps = () => state.applications.filter(a => View.role(state, a.roleId).roundId === state.activeRoundId);
+        const roles = () => state.roles.filter(r => r.roundId === state.activeRoundId);
+        const messages = () => state.messages.filter(m => m.roundId === state.activeRoundId);
+        const round = () => state.rounds.find(r => r.id === state.activeRoundId);
+        const badge = (status, text) => `<span class="badge ${esc(status)}">${esc(text || View.label[status] || status)}</span>`;
+        const date = (v, time = false) => new Intl.DateTimeFormat('en-ZA', {
+          dateStyle: 'medium',
+          ...(time ? {
+            timeStyle: 'short'
+          }
+          : {}),
+          timeZone: 'Africa/Johannesburg'
+        }).format(new Date(v));
+        const personCell = a => {
+          let p = View.person(state, a.personId);
+          return `<div class="person-cell"><span class="avatar">${esc(initials(p.name))}</span><div><b>${esc(p.name)}</b><p>${esc(p.studentNumber)} · ${esc(a.reference)}</p></div></div>`;
+        };
+        function toast(t, error = false) {
+          let el = document.getElementById('toast');
+          el.textContent = t;
+          el.className = 'show' + (error ? ' error': '');
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => el.className = '', 5000);
+        }
+        async function runAction(action, args = [], text) {
+          if (busy) {
+            toast('Please wait for the current operation.');
+            return null;
+          }
+          busy = true;
+          document.body.classList.add('busy');
+          toast('Saving to Google…');
+          try {
+            const response = await rpc('executeAdminAction', SC.token('admin'), action, args, state._revision, View.uid('request'));
+            state = response.state;
+            config = response.config;
+            closeModal();
+            render();
+            if (text) toast(typeof text === 'function' ? text(response.result): text);
+            else toast('Saved to Google.');
+            return response.result;
+          } catch (error) {
+            toast(error.message || String(error), true);
+            return null;
+          } finally {
+            busy = false;
+            document.body.classList.remove('busy');
+          }
+        }
+        function pageHead(eyebrow, title, sub, action = '') {
+          return `<div class="page-head"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="sub">${sub}</p></div>${action}</div>`;
+        }
+        function render() {
+          root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand">${SC.brand()}<small>RECRUITMENT WORKSPACE</small></div><nav class="nav" aria-label="Workspace">${
+            ['overview', 'roles', 'applications', 'interviews', 'decisions', 'communications', 'guide'].map(n => `<button data-route="${n}" class="${route === n ? 'active': ''}">${icon(n)}${
+              ({
+                roles: 'Rounds & roles',
+                guide: 'Setup & help'
+              })[n] || n[0].toUpperCase() + n.slice(1)
+            }</button>`).join('')
+          }</nav><div class="sidebar-foot"><b>Stay & Connect</b>Private administrator workspace.</div></aside><div><header class="topbar"><div><span class="tiny muted">Recruitment round</span><br><select class="round-select" id="round-select" aria-label="Recruitment round">${state.rounds.length ? state.rounds.map(r => `<option value="${esc(r.id)}" ${r.id === state.activeRoundId ? 'selected': ''}>${esc(r.name)} · ${esc(r.category)}</option>`).join(''): '<option>No rounds yet</option>'}</select></div><div class="top-actions wrap">${btn('Refresh', 'refresh')}${btn('Settings', 'google-settings')}${config.applicantUrl ? `<a class="btn" href="${esc(config.applicantUrl)}?page=apply" target="_blank" rel="noopener">Applicant portal</a>`: ''}${btn('Sign out', 'logout')}<span class="tiny muted">${esc(config.actorEmail)}</span></div></header><div class="demo-strip"><span><i class="dot"></i>LIVE RECRUITMENT · Real email · ${config.calendarEnabled ? 'Owner calendar enabled': 'Calendar disabled'}</span><span>All times SAST</span></div><main id="main" tabindex="-1">${
+            ({
+              overview,
+              roles: rolePage,
+              applications: applicationPage,
+              interviews: interviewPage,
+              decisions: decisionPage,
+              communications: communicationPage,
+              guide: guidePage
+            }
+            [route] || overview)()
+          }</main></div></div>`;
+        }
+        function overview() {
+          if (!round()) return pageHead('GET STARTED', 'Create your first recruitment round.', 'Configure the applicant deployment URL in Settings, then create a summer, winter, internship or custom round.', btn('Create round', 'new-round', '', 'primary'));
+          let a = apps(), pending = messages().filter(m => m.status === 'pending'), unique = new Set(a.map(x => x.personId)).size;
+          let stages = [
+            ['Received', ['new', 'review'], '#b4c8be'],
+            ['Shortlisted', ['shortlisted'], '#86b7a2'],
+            ['Interviews', ['booked', 'interviewed'], '#559783'],
+            ['Offers', ['offered', 'accepted'], '#357969'],
+            ['Appointed', ['appointed'], '#175c50']
+          ];
+          return pageHead('YOUR RECRUITMENT WORKSPACE', 'Good to have you back.', 'One place to manage your next vacation accommodation team.', btn('View applications', 'go', 'applications', 'primary')) + `<div class="stats">${
+            [[a.length, 'Applications received', unique + ' unique applicants', 'applications'], [
+              a.filter(x => ['shortlisted', 'booked', 'interviewed'].includes(x.status)).length,
+              'In the interview pipeline',
+              'Across both roles',
+              'interviews'
+            ], [
+              a.filter(x => x.status === 'appointed').length,
+              'Confirmed appointments',
+              roles().reduce((n, r) => n + r.capacity, 0) + ' total positions',
+              'decisions'
+            ], [pending.length, 'Messages awaiting release', 'Review before release', 'communications']].map(x => `<div class="stat"><div class="stat-head">${x[1]}${icon(x[3])}</div><strong>${x[0]}</strong><small>${x[2]}</small></div>`).join('')
+          }</div><div class="grid"><div class="stack"><section class="card"><div class="card-head"><h2>Your recruitment pipeline</h2><span class="tiny muted">${esc(round().season)}</span></div><div class="pipeline">${
+            stages.map(([name, status, color]) => {
+              let n = a.filter(x => status.includes(x.status)).length;
+              return `<div class="pipe"><b>${n}</b><div class="pipe-bar" style="--height:${20 + n * 21}px;--color:${color}"></div><small>${name}</small></div>`;
+            }).join('')
+          }</div><p class="help-line">Counts represent applications. A person can be in two role pipelines.</p></section><section class="card"><div class="card-head"><h2>Open roles</h2>${btn('Manage roles', 'go', 'roles', 'ghost small')}</div>${roles().map(r => `<div class="list-row"><div class="row spread"><div><b>${esc(r.shortTitle)}</b><p class="tiny">${esc(r.team.join(' · '))}</p></div>${badge(r.status)}</div><div class="progress"><span style="width:${Math.min(100, View.occupancy(state, r.id) / r.capacity * 100)}%"></span></div><div class="row spread tiny muted"><span>${View.occupancy(state, r.id)} reserved or appointed</span><span>${r.capacity} positions</span></div></div>`).join('') || '<div class="empty">Create the first role for this round.</div>'}</section></div><div class="stack"><section class="card"><h2>Next on your list</h2>${
+            [['applications', 'Review incoming applications', a.filter(x => ['new', 'review'].includes(x.status)).length + ' applications need your attention'], [
+              'decisions',
+              'Make an appointment decision',
+              a.filter(x => ['interviewed', 'waitlist'].includes(x.status)).length + ' applications await a decision'
+            ], ['communications', 'Release approved messages', pending.length + ' messages in the communication queue']].map(x => `<div class="task"><span class="task-icon">${icon(x[0])}</span><div class="task-content"><b>${x[1]}</b><p>${x[2]}</p></div>${btn('→', 'go', x[0], 'ghost small')}</div>`).join('')
+          }</section><div class="info"><strong>Two applications. One appointment.</strong>Preparing an offer reserves one position and puts the candidate’s other role on hold. Confirmation closes the alternative application.</div><section class="card"><h2>Recent activity</h2>${state.audit.slice(0, 4).map(e => `<div class="audit"><i class="dot"></i><div><b>${esc(e.action)}</b><p>${esc(e.detail)}</p><small class="muted">${date(e.at, true)} · ${esc(e.actor)}</small></div></div>`).join('')}</section></div></div>`;
+        }
+        function rolePage() {
+          if (!round()) return overview();
+          return pageHead('PLAN THE NEXT SEASON', 'Rounds & roles', 'Configure the opening, evidence checks and review team for each recruitment round.', `<div class="row">${btn('New round', 'new-round')}${btn('+ Add role', 'new-role', '', 'primary') + btn(round().status === 'open' ? 'Close round': 'Publish round', 'round-status', round().id) + btn('Copy applicant link', 'round-link')}</div>`) + `<div class="grid equal">${roles().map(r => `<section class="card role-card"><div class="row spread"><div class="role-icon">${icon(r.template === 'night' ? 'clock': 'building')}</div>${badge(r.status)}</div><div class="eyebrow">${r.template === 'night' ? 'AFTER HOURS OPERATIONS': r.template === 'intern' ? 'INTERNSHIP': r.template === 'custom' ? 'OPPORTUNITY': 'GUEST EXPERIENCE'}</div><h2>${esc(r.title)}</h2><p>${esc(r.description)}</p><div class="meta-grid"><div><small>Positions</small><b>${r.capacity}</b></div><div><small>Application deadline · SAST</small><b>${date(r.deadline, true)}</b></div><div><small>Contract period</small>${date(r.start)} – ${date(r.end)}</div><div><small>Review team</small>${esc(r.team.join(', '))}</div></div><h3 class="tiny">Configured requirements</h3>${r.requirements.map(q => `<div class="check"><span style="color:var(--green)">✓</span><div>${esc(q.label)}<small>${esc(q.kind)}</small></div></div>`).join('')}${r.questions.length ? `<p class="tiny">${r.questions.length} additional application questions</p>`: ''}<div class="row" style="margin-top:15px">${btn('View applications', 'role-apps', r.id, 'primary')}${btn(r.status === 'open' ? 'Close applications': r.status === 'draft' ? 'Publish role': 'Reopen', 'role-status', r.id)}</div></section>`).join('') || '<section class="card empty">No roles yet. Add a Receptionist / Assistant, Night Manager, Intern or custom role.</section>'}</div><p class="footer-note">Confirm published requirements against your approved vacancy notices before opening the round.</p>`;
+        }
+        function applicationPage() {
+          let list = apps().filter(a => (!filter.role || a.roleId === filter.role) && (!filter.stage || a.status === filter.stage) && `${View.person(state, a.personId).name} ${View.person(state, a.personId).studentNumber} ${a.reference}`.toLowerCase().includes(filter.search.toLowerCase()));
+          return pageHead('REVIEW WITH CONTEXT', 'Applications', 'Review evidence and structured answers before progressing a candidate.', btn('Export CSV', 'export')) + `<div class="filters"><input id="search" type="search" value="${esc(filter.search)}" placeholder="Search name, student number or reference…" aria-label="Search applications"><select id="role-filter" aria-label="Filter role"><option value="">All roles</option>${roles().map(r => `<option value="${esc(r.id)}" ${filter.role === r.id ? 'selected': ''}>${esc(r.shortTitle)}</option>`).join('')}</select><select id="stage-filter" aria-label="Filter stage"><option value="">All stages</option>${Object.entries(View.label).map(([k, v]) => `<option value="${k}" ${filter.stage === k ? 'selected': ''}>${v}</option>`).join('')}</select></div><section class="card table-card"><div class="table-wrap"><table><thead><tr><th>Applicant</th><th>Role</th><th>Stage</th><th>Declared eligibility</th><th>Rating</th><th></th></tr></thead><tbody>${list.map(a => `<tr><td>${personCell(a)}</td><td>${esc(View.role(state, a.roleId).shortTitle)}</td><td>${badge(a.status)}</td><td><span class="tiny ${View.eligibility(state, a) === 'Needs review' ? '': 'muted'}">${esc(View.eligibility(state, a))}</span></td><td>${a.score ? a.score + ' / 5': '—'}</td><td>${btn('Review →', 'review', a.id, 'small')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No applications match these filters.</td></tr>'}</tbody></table></div><div class="table-foot">${list.length} applications · Selection remains a human decision.</div></section>`;
+        }
+        function interviewPage() {
+          let bookings = state.bookings.filter(b => b.status === 'confirmed' && View.role(state, View.app(state, b.appId).roleId).roundId === state.activeRoundId);
+          return pageHead('A CLEARER INTERVIEW DAY', 'Interviews', 'Candidates choose an available slot after their invitation is released.', btn('+ Add interview slot', 'new-slot', '', 'primary')) + `<section class="card" style="margin-bottom:22px"><div class="card-head"><h2>Interview schedule</h2><span class="tiny muted">All times SAST · ${config.calendarEnabled ? 'Owner calendar enabled': 'Calendar disabled'}</span></div><div class="slots">${
+            state.slots.filter(s => s.roundId === state.activeRoundId).sort((a, b) => a.start.localeCompare(b.start)).map(s => {
+              let b = bookings.find(b => b.slotId === s.id);
+              return `<div class="slot ${b ? 'taken': ''}"><small>${date(s.start)}</small><b>${
+                new Intl.DateTimeFormat('en-ZA', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: 'Africa/Johannesburg'
+                }).format(new Date(s.start))
+              } <span class="tiny muted">· ${s.duration} min</span></b><small>${b ? esc(View.person(state, View.app(state, b.appId).personId).name): 'Available to shortlisted candidates'}</small></div>`;
+            }).join('') || '<div class="empty">Add slots to start booking.</div>'
+          }</div></section><section class="card"><h2>Confirmed bookings</h2>${
+            bookings.map(b => {
+              let a = View.app(state, b.appId), s = state.slots.find(s => s.id === b.slotId);
+              return `<div class="list-row row spread wrap"><div>${personCell(a)}<p class="tiny">${esc(View.role(state, a.roleId).title)} · ${date(s.start, true)}</p></div><div class="row">${btn('Record assessment', 'assess', a.id, 'primary small')}${btn('Cancel booking', 'cancel-booking', b.id, 'small')}</div></div>`;
+            }).join('') || '<div class="empty">No interview bookings yet.</div>'
+          }</section>`;
+        }
+        function decisionPage() {
+          let eligible = apps().filter(a => ['interviewed', 'waitlist', 'offered', 'accepted', 'appointed', 'on_hold'].includes(a.status));
+          return pageHead('ONE PERSON, ONE APPOINTMENT', 'Decisions', 'Coordinate offers across both roles without double-appointing a candidate.', btn('Review messages', 'go', 'communications')) + `<div class="info" style="margin-bottom:22px"><strong>Offers reserve capacity immediately.</strong>Release the prepared offer in Communications, accept it in the applicant portal, then confirm the appointment here. Declining releases the reservation and reopens the alternative application.</div><div class="grid equal">${
+            [...new Set(eligible.map(a => a.personId))].map(id => {
+              let p = View.person(state, id), pa = apps().filter(a => a.personId === id), al = View.allocation(state, id, state.activeRoundId);
+              return `<section class="card"><div class="row spread"><div class="person-cell"><span class="avatar">${esc(initials(p.name))}</span><div><h3 style="margin:0">${esc(p.name)}</h3><p class="tiny">${esc(p.studentNumber)}</p></div></div>${al ? badge(al.status): badge('review', 'Decision needed')}</div>${pa.map(a => `<div class="list-row"><div class="row spread"><b class="tiny">${esc(View.role(state, a.roleId).shortTitle)}</b>${badge(a.status)}</div><p class="tiny">Assessment ${a.score || '—'} / 5 · ${View.checked(state, a) ? 'Evidence checks complete': 'Evidence checks outstanding'}</p><div class="row wrap">${['interviewed', 'waitlist'].includes(a.status) ? btn('Prepare offer', 'offer', a.id, 'primary small'): ''}${a.status === 'accepted' ? btn('Confirm appointment', 'appoint', a.id, 'primary small'): ''}${btn('View review', 'review', a.id, 'ghost small')}</div></div>`).join('')}</section>`;
+            }).join('') || '<section class="card empty">Assessed candidates will appear here.</section>'
+          }</div>`;
+        }
+        function communicationPage() {
+          let list = messages().filter(m => m.status === mailTab);
+          return pageHead('THOUGHTFUL COMMUNICATION', 'Communications', 'Prepare, review and release messages at the right stage.', mailTab === 'pending' ? btn('Release selected', 'release-selected', '', 'primary'): '') + `<div class="info" style="margin-bottom:20px">This queue demonstrates email handling. ${'Releasing messages sends real email to the applicants. Review every message before release.'}</div><div class="tabs">${['pending', 'sent', 'cancelled', 'sending', 'delivery_unknown'].map(t => `<button data-mail-tab="${t}" class="${mailTab === t ? 'active': ''}">${t === 'sent' ? 'Released': t === 'delivery_unknown' ? 'Check delivery': t[0].toUpperCase() + t.slice(1)} (${messages().filter(m => m.status === t).length})</button>`).join('')}</div><section class="card table-card"><div class="table-wrap"><table><thead><tr><th>${mailTab === 'pending' ? '<input type="checkbox" id="select-all" aria-label="Select all pending messages">': ''}</th><th>Recipient</th><th>Message</th><th>Stage</th><th></th></tr></thead><tbody>${list.map(m => `<tr><td>${mailTab === 'pending' ? `<input type="checkbox" class="mail-select" value="${esc(m.id)}" aria-label="Select ${esc(m.kind)} for ${esc(View.person(state, m.personId).name)}">`: ''}</td><td><b>${esc(View.person(state, m.personId).name)}</b><p>${esc(m.to)}</p></td><td><b>${esc(m.kind)}</b><p>${esc(View.role(state, View.app(state, m.appId).roleId).shortTitle)}</p></td><td>${badge(m.status, m.status === 'sent' ? 'Released': m.status)}</td><td>${btn('Preview', 'message', m.id, 'small')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No messages in this queue.</td></tr>'}</tbody></table></div><div class="table-foot">Outcome messages are rechecked on release. Competing-role regrets are suppressed for a candidate with an active offer or appointment.</div></section>`;
+        }
+        function guidePage() {
+          return pageHead('SETUP & OPERATIONS', 'Your recruitment workspace', 'One recruitment engine serves the admin and applicant pages.') + `<div class="grid equal"><section class="card"><h2>Recruitment workflow</h2><ol><li>Configure the applicant deployment URL and optional staff access in Settings.</li><li>Create a round: Summer, Winter, Internship or Custom.</li><li>Add roles, dates, positions, evidence requirements, questions and reviewers.</li><li>Publish the round and share its applicant link.</li><li>Review evidence and shortlist candidates.</li><li>Release invitations, add interview slots and record assessments.</li><li>Prepare and release offers. Applicants accept or decline from their own accounts.</li><li>Confirm accepted appointments.</li></ol></section><section class="card"><h2>Accounts and documents</h2><p>Applicants verify their real email accounts using a one-time code. They can see only their own applications.</p><p>PDF evidence is private in Drive. Download it from the application review; staff do not need the whole folder shared with them.</p><p>Real email is enabled. Google email quotas apply. An uncertain delivery is never automatically retried.</p><p>Close completed rounds to stop new applications. Old snapshots remain in the owner’s database for recovery.</p></section></div>`;
+        }
+        function modal(title, body, foot = '', wide = false) {
+          focusBefore = document.activeElement;
+          modalRoot.innerHTML = `<div class="overlay"><section class="modal ${wide ? 'wide': ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" data-action="close" aria-label="Close dialog">×</button></div><div class="modal-body">${body}</div>${foot ? `<div class="modal-foot">${foot}</div>`: ''}</section></div>`;
+          modalRoot.querySelector('button,input,select,textarea')?.focus();
+        }
+        function closeModal() {
+          modalRoot.innerHTML = '';
+          focusBefore?.focus?.();
+        }
+        function field(label, name, type = 'text', value = '', required = false) {
+          return `<label class="field">${label}<input name="${name}" type="${type}" value="${esc(value)}" ${required ? 'required': ''}></label>`;
+        }
+        function review(id) {
+          let a = View.app(state, id), p = View.person(state, a.personId), r = View.role(state, a.roleId);
+          modal('Application review', `<div class="detail-top row spread wrap"><div>${personCell(a)}<p class="tiny">${esc(r.title)} · ${esc(p.email)}</p></div>${badge(a.status)}</div><div class="grid equal"><div><section class="packet"><div class="eyebrow">APPLICATION DETAILS</div><h2>${esc(p.name)}</h2><p>${esc(p.residence)} · ${esc(p.studentNumber)}</p><h3>Experience</h3><p>${esc(p.experience)}</p><h3>Motivation</h3><p>${esc(a.answers.motivation)}</p><h3>Guest scenario</h3><p>${esc(a.answers.scenario)}</p><h3>Declared availability</h3><p>${a.answers.available ? 'Available for the full period and shifts': 'Availability needs clarification'}</p>${r.template === 'night' ? `<h3>Driving requirement</h3><p>Manual licence: ${a.answers.manualLicence ? 'Yes': 'No'} · ${a.answers.drivingYears} years</p>`: ''}${(a.configuration.questions || []).map(q => `<h3>${esc(q.label)}</h3><p>${esc(a.answers.custom[q.id])}</p>`).join('')}</section>${config.isOwner?btn('Correct applicant identifier','identity',p.id,'small'):''}<div class="section-label">Evidence files</div>${a.documents.map((d, index) => `<div class="doc"><span>▤ ${esc(d.name)}</span><button class="btn small" data-action="download" data-id="${esc(id)}" data-index="${index}">Download PDF</button></div>`).join('')}<p class="help-line">Verify the uploaded evidence before completing the requirement checks.</p></div><div><form id="review-form" data-id="${esc(id)}"><section class="card"><h3>Verify the requirements</h3><p class="tiny">Checks support your decision. Declared answers alone do not verify evidence.</p>${r.requirements.map(q => `<label class="check"><input type="checkbox" name="check_${esc(q.id)}" ${a.checks[q.id] ? 'checked': ''}><span>${esc(q.label)}<small>${q.kind}${q.kind === 'preference' ? ' · does not block progression': ''}</small></span></label>`).join('')}<label class="field" style="margin-top:18px">Review notes<textarea name="notes">${esc(a.notes)}</textarea></label><label class="field">Assessment rating<select name="score">${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${a.score === n ? 'selected': ''}>${n} / 5</option>`).join('')}</select></label><button class="btn primary" type="submit">Save review</button></section></form><div class="section-label">Next action</div><div class="row wrap">${['new', 'review', 'waitlist'].includes(a.status) ? btn('Shortlist', 'shortlist', id, 'primary'): ''}${['shortlisted', 'booked'].includes(a.status) ? btn('Record assessment', 'assess', id): ''}${['interviewed', 'waitlist'].includes(a.status) ? btn('Prepare offer', 'offer', id, 'primary'): ''}${['interviewed', 'review', 'shortlisted'].includes(a.status) ? btn('Waiting list', 'waitlist', id): ''}${['new', 'review', 'shortlisted', 'interviewed', 'waitlist'].includes(a.status) ? btn('Request information', 'request-info', id) + btn('Mark unsuccessful', 'reject', id, 'danger'): ''}</div><p class="help-line">Save verification checks first. Messages are queued for review and administrator release.</p><div class="section-label">Application timeline</div>${a.timeline.slice(0, 5).map(t => `<div class="audit"><i class="dot"></i><div><b>${esc(t.text)}</b><p>${date(t.at, true)}</p></div></div>`).join('')}</div></div>`, btn('Done', 'close'), true);
+        }
+        function newRole() {
+          if (!round()) {
+            toast('Create a recruitment round first.', true);
+            return;
+          }
+          const base = config.templates.assistant;
+          modal('Configure a role', `<form id="role-form"><div class="form-grid"><label class="field">Role template<select name="template" id="template-select"><option value="assistant">Receptionist / Assistant</option><option value="night">Night Manager</option><option value="intern">Intern</option><option value="custom">Custom role</option></select></label>${field('Positions', 'capacity', 'number', base.capacity, true)}</div>${field('Published title', 'title', 'text', base.title, true)}<label class="field">Description<textarea name="description">${esc(base.description)}</textarea></label><div class="form-grid">${field('Contract starts', 'start', 'date', round().start, true)}${field('Contract ends', 'end', 'date', round().end, true)}</div>${field('Application deadline · SAST', 'deadline', 'datetime-local', SC.localDateTime(14), true)}<label class="field">Verification requirements<textarea name="requirements" id="requirements-text" style="min-height:135px">${esc(base.requirements.map(q => q.kind + ': ' + q.label).join('\n'))}</textarea><small>One per line: mandatory:, evidence:, assessed: or preference:.</small></label><label class="field">Additional questions<textarea name="questions" placeholder="One per line. Prefix * for required."></textarea></label>${field('Reviewers · comma separated', 'team', 'text', config.actorEmail, true)}<label class="field">Role publication<select name="status"><option value="open">Published</option><option value="draft">Draft</option></select></label><p class="tiny">The role accepts applications only when its recruitment round is also open.</p><button class="btn primary" type="submit">Save role</button></form>`);
+        }
+        function assess(id) {
+          let a = View.app(state, id);
+          modal('Record interview assessment', `<form id="assessment-form" data-id="${esc(id)}"><p>${esc(View.person(state, a.personId).name)} · ${esc(View.role(state, a.roleId).title)}</p><label class="field">Panel rating<select name="score">${[1, 2, 3, 4, 5].map(n => `<option ${n === 4 ? 'selected': ''}>${n}</option>`).join('')}</select></label><label class="field">Panel assessment notes<textarea name="notes" required>${esc(a.notes)}</textarea></label><button class="btn primary">Save assessment</button></form>`);
+        }
+        function message(id) {
+          let m = state.messages.find(x => x.id === id);
+          modal('Preview communication', `<p class="tiny">TO ${esc(m.to)}</p><h3>${esc(m.subject)}</h3><p class="tiny">${m.status === 'sent' ? 'SENT TO APPLICANT': m.status.toUpperCase()}</p><div class="message-body">${esc(m.body)}</div><p class="help-line">${'Releasing this message sends a real email to the applicant.'}</p>`, m.status === 'pending' ? btn('Release message', 'release', id, 'primary'): ['sending', 'delivery_unknown'].includes(m.status) ? btn('Confirm found in Gmail Sent', 'confirm-delivery', id, 'primary'): btn('Close', 'close'));
+        }
+        function csv() {
+          let quote = v => '"' + String(v ?? '').replace(/^[=+@-]/, "'$&").replace(/"/g, '""') + '"';
+          let content = [
+            ['Reference', 'Name', 'Student number', 'Role', 'Stage'],
+            ...apps().map(a => [
+              a.reference,
+              View.person(state, a.personId).name,
+              View.person(state, a.personId).studentNumber,
+              View.role(state, a.roleId).title,
+              View.label[a.status]
+            ])
+          ].map(row => row.map(quote).join(',')).join('\r\n');
+          let url = URL.createObjectURL(new Blob([content], {
+            type: 'text/csv;charset=utf-8'
+          })), link = document.createElement('a');
+          link.href = url;
+          link.download = 'stay-connect-recruitment-export.csv';
+          link.click();
+          URL.revokeObjectURL(url);
+        }
+        function action(name, id, el) {
+          if (busy) {
+            toast('Please wait for the current operation.');
+            return;
+          }
+          switch (name) {
+            case 'identity': modal('Correct applicant identifier',`<form id="identifier-form" data-id="${esc(id)}">${field('Correct student / applicant identifier','identifier','text',View.person(state,id).studentNumber,true)}<label class="field">Correction reason<textarea name="reason" required maxlength="1000"></textarea></label><p class="tiny">Use only after verifying the correct details. This resets evidence checks and cannot change an active offer or appointment.</p><button class="btn primary">Save correction</button></form>`);break;
+            case 'close':
+              closeModal();
+              break;
+            case 'refresh':
+              closeModal();
+              loadAdmin();
+              break;
+            case 'logout':
+              SC.signOut('admin').then(() => {
+                closeModal();
+                SC.signIn(root, 'admin', loadAdmin);
+              });
+              break;
+            case 'google-settings':
+              googleSettings();
+              break;
+            case 'guide':
+            case 'go':
+              route = name === 'guide' ? 'guide': id;
+              closeModal();
+              render();
+              break;
+            case 'review':
+              review(id);
+              break;
+            case 'role-apps':
+              filter = {
+                search: '',
+                role: id,
+                stage: ''
+              };
+              route = 'applications';
+              render();
+              break;
+            case 'new-role':
+              newRole();
+              break;
+            case 'new-round':
+              modal('Create recruitment round', `<form id="round-form"><label class="field">Round category<select name="category"><option value="summer">Summer</option><option value="winter">Winter</option><option value="internship">Internship</option><option value="custom">Custom</option></select></label>${field('Round name', 'name', 'text', '', true)}${field('Season / programme label', 'season', 'text', '')}<div class="form-grid">${field('Contract starts', 'start', 'date', SC.localDateTime(30).slice(0, 10), true)}${field('Contract ends', 'end', 'date', SC.localDateTime(90).slice(0, 10), true)}</div><p class="tiny">The round starts as a draft. Add roles and then publish it.</p><button class="btn primary">Create round</button></form>`);
+              break;
+            case 'round-status':
+              runAction('setRoundStatus', [id, round().status === 'open' ? 'closed': 'open'], 'Round status updated.');
+              break;
+            case 'role-status':
+              runAction('setRoleStatus', [id], 'Role publication updated.');
+              break;
+            case 'new-slot':
+              if (!round()) {
+                toast('Create a round first.', true);
+                break;
+              }
+              modal('Add interview slot', `<form id="slot-form">${field('Date and time · SAST', 'start', 'datetime-local', SC.localDateTime(7), true)}${field('Duration · minutes', 'duration', 'number', '30', true)}${field('Panel · comma separated', 'panel', 'text', config.actorEmail, true)}${field('Interview location · optional','location')}${field('Online meeting link · optional','meetingUrl','url')}<label class="field">Role<select name="roleId"><option value="">All roles in this round</option>${roles().map(r => `<option value="${esc(r.id)}">${esc(r.title)}</option>`).join('')}</select></label><button class="btn primary">Add slot</button></form>`);
+              break;
+            case 'shortlist':
+              runAction('shortlist', [id], 'Shortlisted. Review and release the invitation.');
+              break;
+            case 'waitlist':
+              runAction('waitlist', [id], 'Added to waiting list.');
+              break;
+            case 'assess':
+              assess(id);
+              break;
+            case 'offer':
+              runAction('prepareOffer', [id], 'Offer prepared. Review and release the offer message.');
+              break;
+            case 'appoint':
+              runAction('appoint', [id], 'Appointment confirmed.');
+              break;
+            case 'cancel-booking':
+              if (confirm('Cancel this interview booking?')) runAction('cancelBooking', [id], 'Booking cancelled.');
+              break;
+            case 'reject':
+              modal('Record unsuccessful outcome', `<form id="rejection-form" data-id="${esc(id)}"><label class="field">Decision reason<textarea name="reason" required maxlength="4000"></textarea></label><button class="btn danger">Record outcome</button></form>`);
+              break;
+            case 'request-info':
+              modal('Request further information', `<form id="information-form" data-id="${esc(id)}"><label class="field">Information requested<textarea name="detail" required maxlength="4000"></textarea></label><button class="btn primary">Queue request</button></form>`);
+              break;
+            case 'message':
+              message(id);
+              break;
+            case 'release':
+              if (confirm('Send this real email to the applicant?')) runAction('send', [[id]], r => `${r.count} sent; ${r.cancelled} cancelled; ${r.unknown} uncertain. Check any remaining queued messages.`);
+              break;
+            case 'release-selected':
+              {
+                const ids = [...document.querySelectorAll('.mail-select:checked')].map(x => x.value);
+                if (!ids.length) {
+                  toast('Select messages first.', true);
+                  break;
+                }
+                if (confirm('Send ' + ids.length + ' real applicant emails?')) runAction('send', [ids], r => `${r.count} sent; ${r.cancelled} cancelled; ${r.unknown} uncertain.`);
+                break;
+              }
+            case 'confirm-delivery':
+              if (confirm('Confirm only if you found this exact email in the sending account. This does not send another email.')) runAction('confirmDelivery', [id], 'Delivery confirmed.');
+              break;
+            case 'download':
+              SC.download('admin', id, el.dataset.index).catch (e => toast(e.message, true));
+              break;
+            case 'reports':
+              rpc('refreshReports', SC.token('admin')).then(() => toast('Reports refreshed.')).catch (e => toast(e.message, true));
+              break;
+            case 'export':
+              csv();
+              break;
+            case 'round-link':
+              navigator.clipboard.writeText(config.applicantUrl + '?page=apply&round=' + encodeURIComponent(round().id)).then(() => toast('Applicant round link copied.')).catch (() => toast('Link: ' + config.applicantUrl + '?page=apply&round=' + round().id));
+              break;
+          }
+        }
+        document.addEventListener('click', e => {
+          let b = e.target.closest('[data-action],[data-route],[data-mode],[data-mail-tab]');
+          if (!b) return;
+          if (b.dataset.route) {
+            route = b.dataset.route;
+            render();
+          } else if (b.dataset.mailTab) {
+            mailTab = b.dataset.mailTab;
+            render();
+          } else action(b.dataset.action, b.dataset.id, b);
+        });
+        document.addEventListener('change', e => {
+          let t = e.target;
+          if (t.id === 'round-select') {
+            filter = {
+              search: '',
+              role: '',
+              stage: ''
+            };
+            runAction('setActiveRound', [t.value]);
+          }
+          if (t.id === 'role-filter' || t.id === 'stage-filter') {
+            filter[t.id === 'role-filter' ? 'role': 'stage'] = t.value;
+            render();
+          }
+          if (t.id === 'select-all') document.querySelectorAll('.mail-select').forEach(x => x.checked = t.checked);
+          if (t.id === 'template-select') {
+            let r = config.templates[t.value], f = t.form;
+            f.elements.title.value = r.title;
+            f.elements.description.value = r.description;
+            f.elements.capacity.value = r.capacity;
+            f.elements.team.value = config.actorEmail;
+            f.elements.requirements.value = r.requirements.map(q => q.kind + ': ' + q.label).join('\n');
+          }
+        });
+        document.addEventListener('input', e => {
+          if (e.target.id === 'search') {
+            let position = e.target.selectionStart;
+            filter.search = e.target.value;
+            render();
+            let input = document.getElementById('search');
+            input.focus();
+            input.setSelectionRange(position, position);
+          }
+        });
+        document.addEventListener('submit', async e => {
+          let f = e.target;
+          if (!f.id) return;
+          e.preventDefault();
+          let fd = new FormData(f), v = Object.fromEntries(fd.entries()), id = f.dataset.id;
+          delete v.files;
+          switch (f.id) {
+            case 'identifier-form':runAction('correctIdentifier',[id,v.identifier,v.reason],'Identifier corrected. Recheck the evidence.');break;
+            case 'settings-form':
+              runAction('setSettings', [
+                {
+                  applicantUrl: v.applicantUrl,
+                  staffEmails: v.staffEmails,
+                  contactEmail: v.contactEmail,
+                  calendarEnabled: fd.has('calendarEnabled')
+                }
+              ], 'Google settings updated.');
+              break;
+            case 'review-form':
+              {
+                let a = View.app(state, id),
+                r = View.role(state, a.roleId),
+                checks = Object.fromEntries(r.requirements.map(q => [q.id, fd.has('check_' + q.id)]));
+                runAction('saveReview', [id, checks, v.notes, v.score], 'Review saved.');
+                break;
+              }
+            case 'information-form':
+              runAction('requestInfo', [id, v.detail], 'Information request queued.');
+              break;
+            case 'assessment-form':
+              runAction('interview', [id, +v.score, v.notes], 'Interview assessment saved.');
+              break;
+            case 'rejection-form':
+              runAction('reject', [id, v.reason], 'Outcome recorded. Regret queued for review.');
+              break;
+            case 'round-form':
+              runAction('addRound', [v], 'Round created. Configure the roles for this season.');
+              break;
+            case 'role-form':
+              {
+                let req = v.requirements.split('\n').filter(x => x.trim()).map((line, i) => {
+                  let parts = line.split(':');
+                  let kind = ['mandatory', 'evidence', 'assessed', 'preference'].includes(parts[0].trim()) ? parts.shift().trim(): 'assessed';
+                  return {
+                    id: 'customreq_' + i,
+                    kind,
+                    label: parts.join(':').trim() || line
+                  };
+                });
+                let questions = v.questions.split('\n').filter(x => x.trim()).map(line => ({
+                  id: View.uid('q'),
+                  label: line.trim().replace(/^\*\s*/, ''),
+                  required: line.trim().startsWith('*'),
+                  type: 'text'
+                }));
+                runAction('addRole', [
+                  {
+                    ...v,
+                    roundId: state.activeRoundId,
+                    deadline: v.deadline + ':00+02:00',
+                    team: v.team.split(',').map(x => x.trim()).filter(Boolean),
+                    requirements: req,
+                    questions
+                  }
+                ], 'Role configuration saved.');
+                break;
+              }
+            case 'slot-form':
+              runAction('addSlot', [
+                {
+                  start: v.start + ':00+02:00',
+                  duration: +v.duration,
+                  panel: v.panel.split(',').map(x => x.trim()).filter(Boolean),
+                  roleId: v.roleId || null,location:v.location||'',meetingUrl:v.meetingUrl||''
+                }
+              ], 'Interview slot added.');
+              break;
+          }
+        });
+        document.addEventListener('keydown', e => {
+          if (!modalRoot.innerHTML) return;
+          if (e.key === 'Escape') closeModal();
+          if (e.key === 'Tab') {
+            let items = [...modalRoot.querySelectorAll('button,input,select,textarea,a[href]')].filter(x => !x.disabled), first = items[0], last = items.at(-1);
+            if (e.shiftKey && document.activeElement === first) {
+              e.preventDefault();
+              last?.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+              e.preventDefault();
+              first?.focus();
+            }
+          }
+        });
+        function googleSettings() {
+          modal('Recruitment settings', `<div class="info"><strong>Live email is enabled.</strong>Applicant codes and released recruitment messages are sent to real email addresses. Google quotas apply.</div>${config.isOwner ? `<form id="settings-form" style="margin-top:20px">${field('Applicant deployment URL · ending in /exec', 'applicantUrl', 'url', config.applicantUrl, true)}${field('Authorised administrator emails · comma separated', 'staffEmails', 'text', config.staffEmails.join(', '))}${field('Public recruitment contact email · optional', 'contactEmail', 'email', config.contactEmail)}<label class="check"><input name="calendarEnabled" type="checkbox" ${config.calendarEnabled ? 'checked': ''}><span>Create interview events in the owner’s Google calendar. No guests are automatically invited.</span></label><button class="btn primary">Save settings</button></form>`: '<p>Only the owner can change access and deployment settings.</p>'}<div class="section-label">Private resources</div><div class="row wrap"><a class="btn" href="${esc(config.databaseUrl)}" target="_blank" rel="noopener">Database Sheet</a><a class="btn" href="${esc(config.folderUrl)}" target="_blank" rel="noopener">Evidence folder</a>${btn('Refresh reports', 'reports')}</div>`);
+        }
+        async function loadAdmin() {
+          try {
+            const response = await rpc('getShowcase', SC.token('admin'));
+            state = response.state;
+            config = response.config;
+            render();
+          } catch (e) {
+            if (String(e.message).includes('AUTH_REQUIRED')) SC.signIn(root, 'admin', loadAdmin);
+            else {
+              root.innerHTML = '<main><h1>Workspace unavailable</h1><p>' + esc(e.message || String(e)) + '</p></main>';
+            }
+          }
+        }
+        root.innerHTML = '<main><h1>Loading recruitment workspace…</h1></main>';
+        loadAdmin();
+      })();
+    </script>
+</body></html>
