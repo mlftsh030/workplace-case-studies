@@ -1,60 +1,78 @@
 # Workplace case studies
 
-**Problems I've solved outside of coursework: process redesigns, workflow automation and systems built with the tools an organisation already has.**
+**Practical improvements to real workflows: using existing tools, reducing repeated work and documenting the handover.**
 
-Not every useful solution is a big codebase. Sometimes the best fix is changing how people work, or getting more out of a tool everyone already uses. This repository documents that kind of work, so it can be checked, repeated and handed over.
+These case studies come from my work at the University of Cape Town. They show two different responses to an
+operational problem: configuring a feature that already existed, and building a small system around a recruitment
+process.
 
-Built by [Tshidiso Molefe](https://github.com/mlftsh030): Computer Science and Applied Statistics student at UCT, Head Tutor in UCT Finance, and founder of [Tlokwa Digital Solutions](https://tlokwadigital.com).
+By **[Tshidiso Molefe](https://github.com/mlftsh030)**, Computer Science and Applied Statistics student and Head Tutor
+in UCT Finance.
 
----
+## Start with a case study
 
-## Case studies
-
-| Case study | Where | What I did | Status |
+| Case study | Problem and contribution | Evidence | Status |
 |---|---|---|---|
-| [**Group assignment marking**](group-marking/) | UCT Department of Finance and Tax | Moved group projects to one submission and one shared mark per group on Amathuba, cutting mark entries by about 80% | Trialled in FTX1005F; adopted for FTX3044F; planned for FTX4056S |
-| [**Stay & Connect recruitment system**](stay-and-connect-recruitment/) | UCT Vacation Accommodation | Built a reusable, no-cost recruitment system on Google Apps Script: applications, evidence checks, interview booking, offers and appointments | Pilot ready; live test and UCT approval next |
+| [Group assignment submission and mark capture](Finance%20Department/README.md) | Repeated entry of the same group mark. I configured Amathuba's group-assignment workflow, trialled it with colleagues and documented the process. | Overview report and operational runbook | Trialled in FTX1005F; the case-study notes report adoption in FTX3044F and a further rollout planned for FTX4056S. These are recorded statuses, not a new rollout audit. |
+| [Stay & Connect recruitment pilot](recruitment-uct/README.md) | Applications, supporting documents and recruitment decisions needed a clearer shared workflow. I built an applicant and staff system on Google Apps Script. | Source code, design report, installation and operations runbooks | Pilot; authorised live testing and institutional approval remain outstanding. |
 
----
+## What the work demonstrates
 
-## What every case study covers
+### Improve the process before adding software
 
-Each one answers the same questions, so they're quick to read and compare:
+The Finance case did not need a new application. Amathuba already supported one submission and one shared mark per
+group. The work was recognising that fit, testing the configuration with colleagues and documenting how to use it.
 
-1. **The problem:** who was struggling, and why it mattered
-2. **The decisions:** the options, what I chose, and why
-3. **The rollout:** how it was tested, and with whom
-4. **The runbook:** how someone else can run it without me
-5. **The lessons:** what worked, and what I'd do differently
+For an illustrative class of 150 students in groups of five, mark capture changes from **150 individual entries to
+30 shared entries**, an **80% reduction in entries**. This is arithmetic under those assumptions, not a measured 80%
+reduction in working time. The trial retained the old process as a backup.
 
-Claims are kept honest: anything estimated or not yet measured is labelled as such.
+### Design for the people doing the administration
 
----
+Stay & Connect recruits UCT students for paid hospitality roles in vacation accommodation. Its recruitment work
+includes reviewing evidence, coordinating interviews, communicating decisions and recording appointments.
 
-## How I work
+The pilot aims to give applicants a clearer route through that process and staff a readable view of what needs
+attention. Google Apps Script connects the interface to Google services rather than requiring a separately operated
+application server. The trade-offs include account quotas, platform constraints and the need for approved data
+handling before institutional use.
 
-The same seven values run through every project. Each case study shows them through the decisions I made.
+The repository contains source and documentation. It does not demonstrate a completed live recruitment round or
+measured reductions in administration time.
 
-| Value | In practice |
+## Reading guide
+
+| If you want to assess... | Read |
 |---|---|
-| **People first** | Start from who is struggling |
-| **I figure it out** | Not knowing how is a starting point |
-| **Products, not projects** | It isn't finished until people use it |
-| **A lot with a little** | Use what already exists before asking for more |
-| **Build it with people** | Test with the people who'll use it, and take their input |
-| **Leave it working without me** | Write it down so others can run it |
-| **Respect the limits** | Budget, privacy and permission are part of the design |
+| The Finance problem, trial and calculation | [Finance overview report](Finance%20Department/OverviewReport.pdf) |
+| How to repeat the group-assignment workflow | [Finance runbook](Finance%20Department/RunBook.pdf) |
+| The recruitment process and design decisions | [Recruitment report](recruitment-uct/docs/Report.pdf) |
+| How to install the recruitment pilot | [Installation runbook](recruitment-uct/docs/InstallationRunbook.pdf) |
+| How to operate a recruitment round | [Operations runbook](recruitment-uct/docs/OperationsRunbook.pdf) |
+| The recruitment implementation | [Apps Script and interface source](recruitment-uct/source/) |
 
-Where each value comes from, and where it shows up: [VALUES.md](VALUES.md)
+## How I approach this work
 
----
+- Start with the people doing the work and the decisions they need to make.
+- Use tools the organisation already has where they fit the problem.
+- Keep important decisions with authorised staff.
+- Distinguish a calculation, a local check and a live operational result.
+- Write runbooks so the process can be repeated and handed over.
 
-## Privacy
+## Scope, privacy and reuse
 
-These case studies involve real students, staff and applicants. No personal information is published here: examples use fictional records, and screenshots have names and details removed.
+These are personal case studies, not official UCT publications or evidence of institutional endorsement. The reports
+explain the context and limitations of each intervention. Avoid adding real student, staff or applicant records to
+public examples or issue reports.
 
----
+The [MIT licence](recruitment-uct/LICENSE) applies to the recruitment code within that folder. It does not grant rights
+to UCT or Stay & Connect branding, and should not be assumed to license all documents in this repository.
 
-## Related
+**The recruitment pilot sends real email.** Read its setup guidance before running it, and use fictional data and
+inboxes you control during authorised testing.
 
-- [SafeTrade](https://github.com/mlftsh030/safetrade): a validation study and tested ELT data pipeline for safer Facebook Marketplace deals
+## Related work
+
+- [SafeTrade](https://github.com/mlftsh030/safetrade): product validation supported by a Python and SQL ELT pipeline.
+- [SL Tours management system](https://github.com/mlftsh030/SL-Tours-management-system): client-led tourism software
+  developed through Tlokwa Digital Solutions.
